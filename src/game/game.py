@@ -1,154 +1,191 @@
 import curses
 import random
-import time
-import json
-import os
+import numpy as np
+import argparse
+from qLearningAgent import QLearningAgent
 
-# Define constant game board dimensions
-GAME_HEIGHT = 30  # Reduced from 40
-GAME_WIDTH = 30 # Reduced from 40
+class SnakeGame:
+    def __init__(self, height=20, width=20):
+        self.height = height
+        self.width = width
+        self.reset()
 
-def draw_boundary(w):
-    for i in range(GAME_WIDTH):
-        w.addch(0, i, curses.ACS_HLINE)
-        if i < GAME_WIDTH - 1:
-            w.addch(GAME_HEIGHT - 1, i, curses.ACS_HLINE)
-    for i in range(GAME_HEIGHT):
-        w.addch(i, 0, curses.ACS_VLINE)
-        if i < GAME_HEIGHT - 1:
-            w.addch(i, GAME_WIDTH - 1, curses.ACS_VLINE)
-    w.addch(0, 0, curses.ACS_ULCORNER)
-    w.addch(0, GAME_WIDTH - 1, curses.ACS_URCORNER)
-    w.addch(GAME_HEIGHT - 1, 0, curses.ACS_LLCORNER)
+    def reset(self):
+        self.snake = [[self.height // 2, self.width // 4],
+                      [self.height // 2, self.width // 4 - 1],
+                      [self.height // 2, self.width // 4 - 2]]
+        self.food = [self.height // 2, self.width // 2]
+        self.score = 0
+        self.direction = curses.KEY_RIGHT
+        return self._get_state()
 
-def show_game_over(w, score):
-    w.clear()
-    game_over_text = "GAME OVER"
-    w.addstr(GAME_HEIGHT // 2, (GAME_WIDTH - len(game_over_text)) // 2, game_over_text)
-    w.refresh()
-    time.sleep(3)  # Show the game over screen for 3 seconds
+    def step(self, action):
+        # Map action (0, 1, 2, 3) to direction
+        if action == 0 and self.direction != curses.KEY_DOWN:
+            self.direction = curses.KEY_UP
+        elif action == 1 and self.direction != curses.KEY_UP:
+            self.direction = curses.KEY_DOWN
+        elif action == 2 and self.direction != curses.KEY_RIGHT:
+            self.direction = curses.KEY_LEFT
+        elif action == 3 and self.direction != curses.KEY_LEFT:
+            self.direction = curses.KEY_RIGHT
 
-def save_game_state(action, snake, food, score):
-    game_state = {
-        "action": action,
-        "snake": snake,
-        "food": food,
-        "score": score,
-        "board_height": GAME_HEIGHT,
-        "board_width": GAME_WIDTH
-    }
-    
-    # Create a directory to store the game states if it doesn't exist
-    os.makedirs("game_states", exist_ok=True)
-    
-    # Save the game state to a JSON file
-    with open(f"game_states/state_{int(time.time())}.json", "w") as f:
-        json.dump(game_state, f)
+        # Move the snake
+        new_head = self.snake[0].copy()
+        if self.direction == curses.KEY_UP:
+            new_head[0] -= 1
+        elif self.direction == curses.KEY_DOWN:
+            new_head[0] += 1
+        elif self.direction == curses.KEY_LEFT:
+            new_head[1] -= 1
+        elif self.direction == curses.KEY_RIGHT:
+            new_head[1] += 1
 
-def main(stdscr):
+        self.snake.insert(0, new_head)
+
+        # Check if game over
+        if (new_head[0] <= 0 or new_head[0] >= self.height - 1 or
+            new_head[1] <= 0 or new_head[1] >= self.width - 1 or
+            new_head in self.snake[1:]):
+            return self._get_state(), -1, True
+
+        # Check if food eaten
+        if new_head == self.food:
+            self.score += 1
+            self._place_food()
+            reward = 1
+        else:
+            self.snake.pop()
+            reward = 0
+
+        return self._get_state(), reward, False
+
+    def _place_food(self):
+        while True:
+            self.food = [random.randint(1, self.height - 2),
+                         random.randint(1, self.width - 2)]
+            if self.food not in self.snake:
+                break
+
+    def _get_state(self):
+        # Create a simple representation of the game state
+        state = np.zeros((self.height, self.width), dtype=int)
+        for segment in self.snake:
+            state[segment[0], segment[1]] = 1
+        state[self.food[0], self.food[1]] = 2
+        return state
+
+    def render(self, window):
+        window.clear()
+        self._draw_boundary(window)
+        for segment in self.snake:
+            window.addch(segment[0], segment[1], curses.ACS_CKBOARD)
+        window.addch(self.food[0], self.food[1], curses.ACS_PI)
+        window.addstr(self.height - 1, 1, f"Score: {self.score}")
+        window.refresh()
+
+    def _draw_boundary(self, window):
+        for i in range(self.width):
+            window.addch(0, i, curses.ACS_HLINE)
+            if i < self.width - 1:
+                window.addch(self.height - 1, i, curses.ACS_HLINE)
+        for i in range(self.height):
+            window.addch(i, 0, curses.ACS_VLINE)
+            if i < self.height - 1:
+                window.addch(i, self.width - 1, curses.ACS_VLINE)
+        window.addch(0, 0, curses.ACS_ULCORNER)
+        window.addch(0, self.width - 1, curses.ACS_URCORNER)
+        window.addch(self.height - 1, 0, curses.ACS_LLCORNER)
+        window.addch(self.height - 1, self.width - 1, curses.ACS_LRCORNER)
+
+def play_game(stdscr):
     curses.curs_set(0)
     sh, sw = stdscr.getmaxyx()
-    
-    # Check if the terminal window is large enough
-    if sh < GAME_HEIGHT + 2 or sw < GAME_WIDTH + 2:
-        stdscr.clear()
+    game = SnakeGame(height=20, width=20)
+
+    if sh < game.height + 2 or sw < game.width + 2:
         stdscr.addstr(0, 0, "Terminal window too small. Please resize and try again.")
-        stdscr.addstr(1, 0, f"Minimum size: {GAME_WIDTH + 2}x{GAME_HEIGHT + 2}")
-        stdscr.addstr(2, 0, f"Current size: {sw}x{sh}")
         stdscr.refresh()
         stdscr.getch()
         return
 
-    w = curses.newwin(GAME_HEIGHT, GAME_WIDTH, (sh - GAME_HEIGHT) // 2, (sw - GAME_WIDTH) // 2)
-    w.keypad(1)
-    w.nodelay(1)  # Make getch non-blocking
+    window = curses.newwin(game.height + 2, game.width + 2, (sh - game.height) // 2, (sw - game.width) // 2)
+    window.keypad(1)
+    window.timeout(100)
 
-    w.clear()
-    draw_boundary(w)
+    state = game.reset()
+    done = False
 
-    snake_x = GAME_WIDTH // 4
-    snake_y = GAME_HEIGHT // 2
-    snake = [
-        [snake_y, snake_x],
-        [snake_y, snake_x - 1],
-        [snake_y, snake_x - 2]
-    ]
+    while not done:
+        key = window.getch()
+        if key == curses.KEY_UP:
+            action = 0
+        elif key == curses.KEY_DOWN:
+            action = 1
+        elif key == curses.KEY_LEFT:
+            action = 2
+        elif key == curses.KEY_RIGHT:
+            action = 3
+        else:
+            action = -1
 
-    food = [GAME_HEIGHT // 2, GAME_WIDTH // 2]
-    w.addch(food[0], food[1], curses.ACS_PI)
+        if action != -1:
+            state, reward, done = game.step(action)
 
-    key = curses.KEY_RIGHT
-    score = 0
+        game.render(window)
+        window.addstr(0, 1, f"Score: {game.score}")
 
-    move_time = 0
-    move_delay = 0.1  # Adjust this value to change the snake's speed
+    window.addstr(game.height // 2, game.width // 2 - 5, "GAME OVER")
+    window.refresh()
+    window.getch()
 
-    action_map = {
-        curses.KEY_UP: "UP",
-        curses.KEY_DOWN: "DOWN",
-        curses.KEY_LEFT: "LEFT",
-        curses.KEY_RIGHT: "RIGHT"
-    }
+def train_agent(stdscr):
+    curses.curs_set(0)
+    sh, sw = stdscr.getmaxyx()
+    game = SnakeGame(height=20, width=20)
 
-    while True:
-        current_time = time.time()
+    if sh < game.height + 2 or sw < game.width + 2:
+        stdscr.addstr(0, 0, "Terminal window too small. Please resize and try again.")
+        stdscr.refresh()
+        stdscr.getch()
+        return
 
-        # Handle input
-        next_key = w.getch()
-        if next_key != -1:
-            if (key == curses.KEY_DOWN and next_key != curses.KEY_UP) or \
-               (key == curses.KEY_UP and next_key != curses.KEY_DOWN) or \
-               (key == curses.KEY_LEFT and next_key != curses.KEY_RIGHT) or \
-               (key == curses.KEY_RIGHT and next_key != curses.KEY_LEFT):
-                key = next_key
+    window = curses.newwin(game.height + 2, game.width + 2, (sh - game.height) // 2, (sw - game.width) // 2)
+    window.keypad(1)
+    window.timeout(100)
 
-        # Move the snake at a constant speed
-        if current_time - move_time > move_delay:
-            move_time = current_time
+    agent = QLearningAgent(state_size=(game.height, game.width), action_size=4)
 
-            new_head = [snake[0][0], snake[0][1]]
+    episodes = 1000
+    for episode in range(episodes):
+        state = game.reset()
+        total_reward = 0
+        done = False
+        step_count = 0
 
-            if key == curses.KEY_DOWN:
-                new_head[0] += 1
-            if key == curses.KEY_UP:
-                new_head[0] -= 1
-            if key == curses.KEY_LEFT:
-                new_head[1] -= 1
-            if key == curses.KEY_RIGHT:
-                new_head[1] += 1
+        while not done:
+            action = agent.get_action(state)
+            next_state, reward, done = game.step(action)
+            agent.update(state, action, reward, next_state, done)
+            state = next_state
+            total_reward += reward
+            step_count += 1
 
-            snake.insert(0, new_head)
+            if step_count % 5 == 0:  # Update the screen every 5 steps
+                game.render(window)
+                window.addstr(0, 1, f"Episode: {episode + 1}/{episodes}, Score: {game.score}")
+                curses.napms(50)  # Pause for 50 milliseconds
 
-            if (snake[0][0] <= 0 or snake[0][0] >= GAME_HEIGHT - 1 or
-                snake[0][1] <= 0 or snake[0][1] >= GAME_WIDTH - 1 or
-                snake[0] in snake[1:]):
-                break
+        print(f"Episode: {episode + 1}, Score: {game.score}")
 
-            if snake[0] == food:
-                score += 1
-                food = None
-                while food is None:
-                    nf = [
-                        random.randint(1, GAME_HEIGHT - 2),
-                        random.randint(1, GAME_WIDTH - 2)
-                    ]
-                    food = nf if nf not in snake else None
-                w.addch(food[0], food[1], curses.ACS_PI)
-            else:
-                tail = snake.pop()
-                w.addch(tail[0], tail[1], ' ')
-
-            w.addch(snake[0][0], snake[0][1], curses.ACS_CKBOARD)
-            w.addstr(GAME_HEIGHT - 1, 1, f"Score: {score}")
-            w.refresh()
-
-            # Save the game state after each move
-            save_game_state(action_map.get(key, "NONE"), snake, food, score)
-
-        # Add a small sleep to prevent high CPU usage
-        time.sleep(0.01)
-
-    show_game_over(w, score)
+    window.getch()
 
 if __name__ == "__main__":
-    curses.wrapper(main)
+    parser = argparse.ArgumentParser(description="Snake Game")
+    parser.add_argument('--train', action='store_true', help="Train the Q-learning agent")
+    args = parser.parse_args()
+
+    if args.train:
+        curses.wrapper(train_agent)
+    else:
+        curses.wrapper(play_game)
